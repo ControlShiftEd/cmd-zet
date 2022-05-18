@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # shellcheck disable=SC2016,SC2119,SC2120
 set -e
 shopt -s extglob
@@ -9,10 +9,8 @@ shopt -s extglob
 : "${EDITOR:=vi}"
 : "${HELP_BROWSER:=}"
 : "${EXE:="${0##*/}"}"
-: "${GITUSER:="$USER"}"
 : "${GITBRANCH:=main}"
-: "${GHREPOS:="$HOME/Repos/github.com/$GITUSER"}"
-: "${PRIVATE:="$HOME/Private"}"
+: "${PRIVATE:="$HOME/Documents"}"
 : "${VIDEOS:="$HOME/Videos"}"
 : "${PICTURES:="$HOME/Pictures"}"
 : "${DOWNLOADS:="$HOME/Downloads"}"
@@ -22,7 +20,7 @@ declare -A CONF
 
 _initialize() {
   : "${CONF[zet.private]:="$PRIVATE/zet"}"
-  : "${CONF[zet.public]:="$GHREPOS/zet"}"
+  : "${CONF[zet.public]:="$ZETTELKASTEN"}"
   : "${CONF[current]:=public}"
   : "${CONF[cast.directory]:="$VIDEOS/ZettelCasts"}"
   : "${CONF[cast.pending.directory]:="${CONF[cast.directory]}/Pending"}"
@@ -278,7 +276,7 @@ x.cast.sync() {
   [[ -z "$zetid" ]] && echo '<failed to lookup zetid>' && return 1
   local title=$(x.title "$zetid")
   local body=$(x.body "$zetid" codeless)
-  local zeturl="https://github.com/$GITUSER/zet/tree/$GITBRANCH/$zetid"
+  local zeturl="https://github.com/$GITUSER/zet/blob/$GITBRANCH/$zetid"
   [[ -n "${CONF[cast.footer]}" ]] && \
     foot=$(x.body "${CONF[cast.footer]}")
   desc="$body$n$n$foot$n${n}[ZETID:$zetid]$n$zeturl"
@@ -331,7 +329,9 @@ x.pull() {
 # TODO add full support for zet query strings
 x.find() { x.dex.titles | pcregrep -i "$*"; }
 
-x.link() { x.find "$*" | x.mark.link; }
+x.mdlink() { x.find "$*" | x.mark.link; }
+
+x.mdurl() { x.find "$*" | x.mark.url; }
 
 x.faq() { x.find "$*" | pcregrep -i '\?$'; }
 
@@ -360,8 +360,8 @@ x.chat() {
 x.url() {
   _filter "$@" && return $?
   local zetid="$1"
-  [[ -z "$zetid" || $zetid = last ]] && zetid=$(x.last)
-  echo "https://github.com/$GITUSER/zet/tree/$GITBRANCH/$zetid"
+  [[ -z "$zetid" || $zetid = last ]] && zetid=$(x.last) || zetid="$zetid.md"
+  echo "https://github.com/$GITUSER/zet/blob/$GITBRANCH/$zetid"
 }
 
 _select_zet() {
@@ -398,8 +398,8 @@ x.commit() {
 
   # if no zet, bail
   local dir
-  dir="$(x.dir)/$1"
-  local readme="$dir/README.md"
+  dir="$(x.dir)"
+  local readme="$dir/$1.md"
   [[ ! -r $readme ]] && echo "<not found: $1>" && return 1
 
   # first pull to make sure no merge conflicts
@@ -410,7 +410,7 @@ x.commit() {
   title=$(x.title "$1")
   cd "$dir"
   git pull -q
-  git add -A "$dir"
+  git add -A "$readme"
   git commit -m "$title"
   git push
   cd -
@@ -434,9 +434,8 @@ x.video() {
   fi
 
   # if no zet, bail
-  local dir readme
-  dir="$(x.dir)/$zetid"
-  readme="$dir/README.md"
+  local readme
+  readme="$(x.dir)/$zetid.md"
   [[ ! -r "$readme" ]] && echo "<not found: $zetid/$ytid>" && return 1
 
   # if zet has vid line...
@@ -499,21 +498,20 @@ x.dir() {
 }
 
 x.create() {
-  local title="$*"
-  local dir readme
-  dir="$(x.dir)/$(x.isosec)"
-  readme="$dir/README.md"
-  mkdir -p "$dir"
+  local title dir readme
+  title="$*"
+  dir="$(x.dir)"
+  readme="$dir/$(x.isosec).md"
   printf "# %s\n\n" "$title" > "$readme"
   #iam writing "$title"
   "${CONF[editor]}" "$readme"
   cd "$dir" &>/dev/null
-  [[ -s "$dir/README.md" ]] || return 1
-  line=$(head -1 "$dir/README.md" | sed 's/#\+ *//')
+  [[ -s "$readme" ]] || return 1
+  line=$(head -1 "$readme" | sed 's/#\+ *//')
   test -n "$line"
   git pull -q
   echo "Committing: $line"
-  git add -A "$dir" &>/dev/null
+  git add -A "$readme" &>/dev/null
   git commit -m "$line" &>/dev/null
   git push &>/dev/null
 }
@@ -523,7 +521,7 @@ x.edit() {
   local dir zetid editor="${CONF[editor]}"
   dir=$(x.get "$@")
   zetid=${dir##*/}
-  local readme="$dir/README.md"
+  local readme="$dir"
   [[ ! -r "$readme" ]] && echo "Not found." && return 1
   #iam writing "$(x.title $zetid)"
   "$editor" "$readme"
@@ -536,21 +534,21 @@ x.dex.titles() {
  dir=$(x.dir)
  while IFS= read -u 7 -r d; do
    local id=${d##*/}
-   [[ -r "$d/README.md" ]] || continue
-   IFS= read -r title < "$d/README.md" || true
+   [[ -r "$d" ]] || continue
+   IFS= read -r title < "$d" || true
    [[ $title =~ ^#\  ]] || title="<untitled>"
    title="${title#*# }"
    echo "$id $title"
- done 7< <(find "$dir" -maxdepth 2 -type d -path '*/2*'|sort)
+ done 7< <(find "$dir" -maxdepth 2 -type f -path '*/2*'|sort)
 }
 
 x.get() {
   local zetid dir last arg="$*"
   if [[ $arg =~ ^[0-9]{14,}$ ]]; then
-    echo "$(x.dir)/$1"
+    echo "$(x.dir)$1.md"
   elif [[ $arg = last ]]; then
     last="$(x.last)"
-    [[ -n "$last" ]] && echo "$(x.dir)/$last"
+    [[ -n "$last" ]] && echo "$(x.dir)$last"
   elif [[ $arg =~ /[a-zA-Z0-9_-]{11}$ ]]; then
     zetid=$(x.cast.zet "${arg#yt:}")
     [[ -n "$zetid" ]] && echo "$(x.dir)/$zetid"
@@ -558,11 +556,11 @@ x.get() {
     mapfile -t matches < <(x.find "$@")
     (( ${#matches[@]} > 0 )) || return 1
     if (( ${#matches[@]} == 1 )); then
-      echo "$(x.dir)/${matches[0]%% *}"
+      echo "$(x.dir)${matches[0]%% *}"
       return
     fi
     select match in "${matches[@]}"; do
-      echo "$(x.dir)/${match%% *}"
+      echo "$(x.dir)${match%% *}"
       return $?
     done
   fi
@@ -611,7 +609,7 @@ x.text() {
   _filter "$@" && return $?
   local dir readme
   dir=$(x.get "$@")
-  readme="$dir/README.md"
+  readme="$dir.md"
   [[ -r "$readme" ]] || return 1
   local buf
   if [[ $2 = codeless ]];then
@@ -626,20 +624,18 @@ x.text() {
 
 x.source() {
   _filter "$@" && return $?
-  local dir readme
-  dir="$(x.dir)/$1"
-  readme="$dir/README.md"
+  local readme
+  readme="$(x.dir)$1.md"
   [[ -r "$readme" ]] || return 1
   echo "$(<"$readme")"
 }
 
 x.title() {
   _filter "$@" && return $?
-  local id="$1" dir readme title
-  [[ $id = last ]] && id=$(x.last)
-  dir="$(x.dir)/$id"
-  [[ -d "$dir" ]] || return 1
-  readme="$dir/README.md"
+  local id="$1" readme title
+  [[ $id = last ]] && id=$(x.last) || id="$id.md"
+  readme="$(x.dir)$id"
+  [[ -r "$readme" ]] || return 1
   read -r title < "$readme"
   [[ ! $title =~ ^#\  ]] && return 1
   pandoc -f gfm -t plain --wrap=none <<< "${title#\# }"
@@ -650,22 +646,20 @@ x.dex.tags() {
   dir=$(x.dir)
   while IFS= read -u 7 -r d; do
     local id=${d##*/}
-    [[ -r "$d/README.md" ]] || continue
-    buf="$(<"$d/README.md")"
+    [[ -r "$d" ]] || continue
+    buf="$(<"$d")"
     [[ $buf =~ $ln\ {4}# ]] || continue
     buf=${buf##*    #}
     echo "$id ${buf//#/}"
-  done 7< <(find "$dir" -maxdepth 2 -type d -path '*/2*'|sort)
+  done 7< <(find "$dir" -maxdepth 2 -type f -path '*/2*'|sort)
 }
 
 x.tags() {
   _filter "$@" && return $?
   local id="${1%% *}"
-  [[ $id = last ]] && id=$(x.last)
-  local dir readme tags
-  dir="$(x.dir)/$id"
-  [[ -d $dir ]] || return 1
-  readme="$dir/README.md"
+  [[ $id = last ]] && id=$(x.last) || id="$id.md"
+  local readme tags
+  readme="$(x.dir)$id"
   [[ -r $readme ]] || return 1
   tag=$(tail -1 "$readme")
   [[ $tag =~ ^\ {4,}(#.+) ]] || return 0
@@ -675,9 +669,9 @@ x.tags() {
 x.body() {
   _filter "$@" && return $?
   local dir readme title buf eol
-  dir="$(x.dir)/$1"
+  dir="$(x.dir)"
   [[ -d $dir ]] || return 1
-  readme="$dir/README.md"
+  readme="$dir/$1.md"
   if [[ $2 = codeless ]];then
     buf=$(x.codeless "$1")
   else
@@ -701,7 +695,7 @@ x.query() {
 x.ids() {
   while read -r line; do
     echo "${line##*/}"
-  done < <(find "$(x.dir)" -maxdepth 2 -type d -path '*/2*'| sort)
+  done < <(find "$(x.dir)" -maxdepth 2 -type f -path '*/2*'| sort)
 }
 
 x.before() {
